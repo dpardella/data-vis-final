@@ -1,0 +1,425 @@
+---
+title: "data vis final"
+output: html_document
+---
+
+In our project, we wanted to see how density and overcrowding in NYC affected covid rates. Below we did a tidycensus API call to collect zip code-level data from the ACS 2015-2019. Then we compared that with covid data from the city, which can be accessed here: https://data.cityofnewyork.us/dataset/DOHMH-COVID-19-Antibody-by-Modified-ZIP-Code-Tabul/6qs8-44ki
+
+```{r}
+library(tidycensus)
+library(tidyverse)
+library(janitor)
+library(ggpubr)
+```
+
+
+```{r}
+acs_vars <- load_variables(2019, "acs5", cache = TRUE)
+```
+
+Even though we only wanted to cover crowding and density, we also wanted to cover our bases and do controls on those variables, so we included a bunch of different variables in the call.
+
+```{r}
+zip_acs_raw <- get_acs(
+  geography = "zcta",
+  state = "NY",
+  variables = c(
+    "population" = "B01001_001",
+    "white" = "B02001_002",
+    "black" = "B02001_003",
+    "asian" = "B02001_005",
+    "pacific_islander" = "B02001_006",
+    "hispanic" = "B03001_003",
+    "total_units" = "B25001_001",
+    "units_occupied" = "B25002_002",
+    "units_vacant" = "B25002_003",
+    "owner_occupied" = "B25003_002",
+    "renter_occupied" = "B25003_003",
+    "crowding_total" = "B25014_001",
+    "owner_crowding_total" = "B25014_002",
+    "owner_1_1.5_per_room" = "B25014_005",
+    "owner_1.5_2_per_room" = "B25014_006",
+    "owner_over_2_per_room" = "B25014_007",
+    "renter_crowding_total" = "B25014_008",
+    "renter_1_1.5_per_room" = "B25014_011",
+    "renter_1.5_2_per_room" = "B25014_012",
+    "renter_over_2_per_room" = "B25014_013",
+    "units_in_structure_total" = "B25024_001",
+    "detached" = "B25024_002",
+    "attached" = "B25024_003",
+    "10_19_unit_structure" = "B25024_007",
+    "20_49_unit_structure" = "B25024_008",
+    "over_50_unit_structure" = "B25024_009",
+    "household_vehicles_total" = "B25044_001",
+    "owner_occupied_no_cars" = "B25044_003",
+    "renter_occupied_no_cars" = "B25044_010",
+    "median_gross_rent" = "B25064_001",
+    "rent_percent_hh_income" = "B25071_001",
+    "rent_burden_total" = "B25070_001",
+    "rent_burden_30_35_percent" = "B25070_007",
+    "rent_burden_35_40_percent" = "B25070_008",
+    "rent_burden_40_50_percent" = "B25070_009",
+    "rent_burden_over_50_percent" = "B25070_010",
+    "median_household_income" = "B19013_001",
+    "education_total" = "B15003_001",
+    "hs_diploma" = "B15003_017",
+    "ged" = "B15003_018",
+    "college>1" = "B15003_019",
+    "college<1_no_degree" = "B15003_020",
+    "associates_degree" = "B15003_021",
+    "bachelors_degree" = "B15003_022",
+    "masters_degree" = "B15003_023",
+    "professional_degree" = "B15003_024",
+    "doctorate" = "B15003_025",
+    "citizenship_total" = "B05001_001",
+    "naturalized_citizen" = "B05001_005",
+    "non_citizen" = "B05001_006",
+    "commute_total" = "B08301_001",
+    "commute_by_car" = "B08301_002",
+    "commute_by_public_transit" = "B08301_010",
+    "commute_by_bus" = "B08301_011",
+    "commute_by_subway" = "B08301_012",
+    "commute_by_commuter_rail" = "B08301_013",
+    "commute_by_other_rail" = "B08301_014",
+    "commute_by_walk" = "B08301_019",
+    "commute_by_bicycle" = "B08301_018",
+    "commute_by_ferry" = "B08301_015",
+    "poverty_total" = "C17002_001",
+    "poverty_<.5" = "C17002_002",
+    "poverty_.5_1.0" = "C17002_003"
+    
+  ),
+  survey = "acs5",
+  year = 2019,
+  output = "wide",
+  geometry = FALSE
+)
+```
+
+
+```{r}
+write.csv(zip_acs_raw, "zip_acs_raw.csv", row.names = FALSE)
+```
+
+I totally forgot to get vacancy data, so I snagged that later.
+
+```{r}
+zip_acs2_raw <- get_acs(
+  geography = "zcta",
+  state = "NY",
+  variables = c(
+    "vacancy_total" = "B25004_001",
+    "for_rent" = "B25004_002",
+    "rented_not_occ" = "B25004_003",
+    "for_sale" = "B25004_004",
+    "sold_not_occ" = "B25004_005",
+    "seasonal_rec_occaisional" = "B25004_006",
+    "migrant_worker" = "B25004_007",
+    "other_vacant" = "B25004_008"
+    
+  ),
+  survey = "acs5",
+  year = 2019,
+  output = "wide",
+  geometry = FALSE
+)
+```
+
+
+```{r}
+write.csv(zip_acs2_raw, "zip_acs2_raw.csv", row.names = FALSE)
+```
+
+```{r}
+covid_census <- read_csv("combined acs covid zip data - transformations 2.csv", 
+    col_types = cols(zip = col_character(), 
+        lat = col_number(), lon = col_number(), 
+        covid_case_rate = col_number(), population_covid = col_number(), 
+        covid_death_rate = col_number(), 
+        covid_positive_percent = col_number(), 
+        population_acs = col_number(), median_household_income = col_number(), 
+        median_gross_rent = col_number(), 
+        white = col_number(), black = col_number(), 
+        aapi = col_number(), hisp = col_number(), 
+        nonwhite = col_number(), renter_not_owner = col_number(), 
+        vacancy_rate_for_rent_or_sale = col_number(), 
+        crowding = col_number(), severe_crowding = col_number(), 
+        sfh = col_number(), `10+unit_building` = col_number(), 
+        `20+unit_building` = col_number(), 
+        `50+unit_building` = col_number(), 
+        hhs_no_cars = col_number(), rent_percent_hh_income = col_number(), 
+        rent_burdened = col_number(), severely_rent_burdened = col_number(), 
+        `hs_diploma+` = col_number(), `bachelors+` = col_number(), 
+        foreign_born = col_number(), car_commute = col_number(), 
+        public_transit = col_number(), `walk+bike` = col_number(), 
+        poverty = col_number()))
+```
+
+We did the join in google sheets, so the full combined data spreadsheet is the one above. Below is a series of correlations and regressions and charts and graphs we made to try to discover the most important variables when it comes to understanding covid spread.
+
+```{r}
+plot(data = covid_census, covid_positive_percent ~ vacancy_rate_for_rent_or_sale)
+```
+
+```{r}
+covid_t2 <- read_csv("combined acs covid zip data - t2.csv")
+```
+
+```{r}
+covidt2 <- clean_names(covid_t2)
+```
+
+
+```{r}
+hist(covid_census$crowding)
+```
+
+```{r}
+hist(covidt2$covid_case_rate)
+```
+
+```{r}
+cor(covid_census$covid_positive_percent, covid_census$aapi)
+```
+
+```{r}
+cor(covidt2$covid_case_rate, covidt2$x10_b100)
+```
+
+```{r}
+positive.crowding.lm <- lm(data = covid_census, covid_positive_percent ~ crowding)
+
+summary(positive.crowding.lm)
+```
+
+
+```{r}
+covid.car.rent.lm <- lm(covid_case_rate ~ carcommute100 + median_gross_rent, data = covid_t2)
+
+summary(covid.car.rent.lm)
+```
+
+```{r}
+covid.density.crowding.lm <- lm(covid_case_rate ~ x10_b100 + crowding100, data = covidt2)
+
+summary(covid.density.crowding.lm)
+```
+
+```{r}
+covid.density.lm <- lm(covid_case_rate ~ x10_b100, data = covidt2)
+
+summary(covid.density.lm)
+```
+
+```{r}
+covid.severecrowding.lm <- lm(covid_case_rate ~ severecrowding100, data = covidt2)
+
+summary(covid.severecrowding.lm)
+```
+
+```{r}
+covid.car.no_car.lm <- lm(covid_case_rate ~ carcommute100 + nocars100, data = covidt2)
+
+summary(covid.car.no_car.lm)
+```
+
+```{r}
+covid.foreignborn.lm <- lm(covid_case_rate ~ foreign100, data = covidt2)
+
+summary(covid.foreignborn.lm)
+```
+
+```{r}
+covid.aapi.lm <- lm(covid_case_rate ~ aapi100, data = covidt2)
+
+summary(covid.aapi.lm)
+```
+
+```{r}
+covid.crowding.lm <- lm(covid_case_rate ~ crowding100, data = covidt2)
+
+summary(covid.crowding.lm)
+```
+
+```{r}
+covid.poverty.lm <- lm(covid_case_rate ~ poverty100, data = covidt2)
+
+summary(covid.poverty.lm)
+```
+
+```{r}
+covid.vacancy.lm <- lm(covid_case_rate ~ vacancy100, data = covidt2)
+
+summary(covid.vacancy.lm)
+```
+
+```{r}
+covid.hisp.lm <- lm(covid_case_rate ~ hisp100, data = covidt2)
+
+summary(covid.hisp.lm)
+```
+
+```{r}
+covid.ba.income.lm <- lm(covid_case_rate ~ ba_100 + median_household_income, data = covidt2)
+
+summary(covid.ba.income.lm)
+```
+
+```{r}
+covid.ba.lm <- lm(covid_case_rate ~ ba_100, data = covidt2)
+
+summary(covid.ba.lm)
+```
+
+```{r}
+covid.b10.income.lm <- lm(covid_case_rate ~ x10_b100 + median_household_income, data = covidt2)
+
+summary(covid.b10.income.lm)
+```
+
+```{r}
+covid.carcommute.income.lm <- lm(covid_case_rate ~ carcommute100 + median_household_income, data = covidt2)
+
+summary(covid.carcommute.income.lm)
+```
+
+```{r}
+covid.rent.income.lm <- lm(covid_case_rate ~ median_gross_rent + median_household_income, data = covidt2)
+
+summary(covid.rent.income.lm)
+```
+
+```{r}
+covid.sfh.income.lm <- lm(covid_case_rate ~ sfh100 + median_household_income, data = covidt2)
+
+summary(covid.sfh.income.lm)
+```
+
+```{r}
+covid.carcommute.ba.lm <- lm(covid_case_rate ~ carcommute100 + ba_100, data = covidt2)
+
+summary(covid.carcommute.ba.lm)
+```
+
+```{r}
+covid.sfh.rent.lm <- lm(covid_case_rate ~ sfh100 + median_gross_rent, data = covidt2)
+
+summary(covid.sfh.rent.lm)
+```
+
+```{r}
+covid.carcommute.rent.lm <- lm(covid_case_rate ~ carcommute100 + median_gross_rent, data = covidt2)
+
+summary(covid.carcommute.rent.lm)
+```
+
+```{r}
+covid.carcommute.ba.rent.sfh.lm <- lm(covid_case_rate ~ carcommute100 + ba_100 + median_gross_rent + sfh100, data = covidt2)
+
+summary(covid.carcommute.ba.rent.sfh.lm)
+```
+
+```{r}
+covid.carcommute.sfh.lm <- lm(covid_case_rate ~ carcommute100 + sfh100, data = covidt2)
+
+summary(covid.carcommute.sfh.lm)
+```
+
+```{r}
+covid.carcommute.b10.lm <- lm(covid_case_rate ~ carcommute100 + x10_b100, data = covidt2)
+
+summary(covid.carcommute.b10.lm)
+```
+
+```{r}
+covid.carcommute.ba.rent.b10.lm <- lm(covid_case_rate ~ carcommute100 + ba_100 + median_gross_rent + x10_b100, data = covidt2)
+
+summary(covid.carcommute.ba.rent.b10.lm)
+```
+
+```{r}
+covid.crowding.b10.lm <- lm(covid_case_rate ~ crowding100 + x10_b100, data = covidt2)
+
+summary(covid.crowding.b10.lm)
+```
+
+```{r}
+covid.carcommute.ba.rent.lm <- lm(covid_case_rate ~ carcommute100 + ba_100 + median_gross_rent, data = covidt2)
+
+summary(covid.carcommute.ba.rent.lm)
+```
+
+```{r}
+covid.ba.sfh.lm <- lm(covid_case_rate ~ ba_100 + sfh100, data = covidt2)
+
+summary(covid.ba.sfh.lm)
+```
+
+```{r}
+covid.crowding.sfh.lm <- lm(covid_case_rate ~ crowding100 + sfh100, data = covidt2)
+
+summary(covid.crowding.sfh.lm)
+```
+
+```{r}
+covid.crowding.white.lm <- lm(covid_case_rate ~ crowding100 + white100, data = covidt2)
+
+summary(covid.crowding.white.lm)
+```
+
+```{r}
+covid.ba.rent.lm <- lm(covid_case_rate ~ ba_100 + median_gross_rent, data = covidt2)
+
+summary(covid.ba.rent.lm)
+```
+
+Here I discovered that the most important variable was one we didn't have: support for Trump. I tried to do a last-minute proxy for Trump support by just controlling for Staten Island, but that didn't work all that well, obviously.
+
+```{r}
+covidt23 <- covidt2 %>%
+  mutate(staten_island = case_when(
+    startsWith(boro, "Staten Island") ~ 1
+  ))
+```
+
+```{r}
+covidt22 <- covidt2 %>%
+  mutate(staten_island = boro == "Staten Island")
+```
+
+```{r}
+covid.crowding.staten.lm <- lm(covid_case_rate ~ crowding100 + staten_island, data = covidt22)
+
+summary(covid.crowding.staten.lm)
+```
+
+```{r}
+covid.sfh.staten.lm <- lm(covid_case_rate ~ sfh100 + staten_island, data = covidt22)
+
+summary(covid.sfh.staten.lm)
+```
+
+```{r}
+covid.sfh.staten.income.lm <- lm(covid_case_rate ~ sfh100 + staten_island + median_household_income, data = covidt22)
+
+summary(covid.sfh.staten.income.lm)
+```
+
+```{r}
+covid.staten.lm <- lm(covid_case_rate ~ staten_island, data = covidt22)
+
+summary(covid.staten.lm)
+```
+
+I modified this ggplot below to get all of the charts that look like they were made in R.
+
+```{r}
+ggplot(data = covidt22) +
+  aes(x = staten_island, y = covid_case_rate) +
+  geom_point(aes(color = boro)) +
+  geom_smooth(method='lm', se = FALSE)
+```
+
+
+
+
